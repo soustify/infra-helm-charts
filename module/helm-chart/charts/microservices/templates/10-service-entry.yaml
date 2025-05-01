@@ -1,0 +1,29 @@
+{{- $istio := .Values.istio | default dict }}
+{{- $enable := $istio.enable | default false }}
+
+{{- if $enable}}
+{{- $egress := $istio.egress | default dict }}
+{{- $serviceEntries := $egress.serviceEntry | default nil }}
+
+{{- range $key, $value := $serviceEntries }}
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: {{ $value.name }}
+spec:
+  location: MESH_EXTERNAL
+  resolution: DNS
+  hosts:
+  {{- range $value.hosts }}
+    - {{ . | quote }}
+  {{- end}}
+  ports:
+  {{- range $portKey, $port := $value.ports }}
+    - number: {{ $port.number }}
+      name: {{ $port.name }}
+      protocol: {{ $port.protocol }}
+  {{- end}}
+{{- end }}
+
+{{- end }}

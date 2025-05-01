@@ -1,0 +1,24 @@
+{{- $keda:= .Values.keda| default dict }}
+{{- $secrets:= $keda.secrets| default nil }}
+{{- $authentication:= $keda.authentication | default nil }}
+{{- $scale:= $keda.scale | default dict }}
+
+{{ if $secrets  }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secrets.name }}
+data:
+  {{ toYaml $secrets.data | indent 1 }}
+{{ end }}
+
+{{ if $authentication }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ $authentication.name }}
+spec:
+{{ toYaml $authentication.spec | indent 1 }}
+{{ end }}

@@ -1,0 +1,115 @@
+{{- $application_type := "terraform" }}
+{{- $Release := .Release.Name }}
+{{- $environment := .Values.environment | default "none" }}
+{{- $namespace := .Release.Namespace | default "none" }}
+{{- $csiSecrets := .Values.csiSecrets | default dict }}
+{{- $csiSecretsEnabled := $csiSecrets.enabled }}
+{{- $serviceAccountName := $csiSecrets.serviceAccountName | default "parameters" }}
+{{- $module := .Values.module | default "none" }}
+
+
+
+apiVersion: "v1"
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-{{ now | date "200601021504" }}
+  labels:
+    orbit_application_name: {{ .Release.Name }}
+    orbit_application_type: {{ $application_type }}
+    orbit_module: {{ $module }}
+    "sidecar.istio.io/inject": "false"
+spec:
+  restartPolicy: Never
+  {{- if .Values.nodeSelector }}
+  nodeSelector:
+    {{- toYaml .Values.nodeSelector | nindent 4 }}
+  {{- end }}
+  {{- if .Values.initContainers }}
+  initContainers:
+    {{- range $container := .Values.initContainers }}
+    - name: {{ $container.name | default "" }}
+      imagePullPolicy: IfNotPresent
+      image: {{ $container.repository.image }}:{{ $container.repository.tag | default "" }}
+      env:
+        - name: ENVIRONMENT
+          value: {{ $environment }}
+        - name: NAMESPACE
+          value: {{ $namespace }}
+      {{- with $container.environments }}
+        {{- range $key, $value := . }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+      {{- end }}
+      {{- with $container.resources }}
+      resources:
+        requests:
+          cpu: {{ .requests.cpu | default "100m" }}
+          memory: {{ .requests.memory | default "32Mi" }}
+        limits:
+          cpu: {{ .limits.cpu | default "200m" }}
+          memory: {{ .limits.memory | default "128Mi" }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+
+  {{- if $csiSecretsEnabled }}
+  serviceAccountName: {{ $serviceAccountName }}
+  volumes:
+    - name: secrets-store-inline
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: {{ .Release.Name }}
+
+  {{ else }}
+    {{- if and (not (eq $serviceAccountName "")) (not (empty $serviceAccountName)) }}
+  serviceAccountName: {{ $serviceAccountName | quote}}
+    {{- end }}
+  {{- end }}
+
+  containers:
+    {{- range $container := .Values.containers }}
+    - name: {{ $container.name | default "" }}
+      imagePullPolicy: IfNotPresent
+      image: {{ $container.repository.image }}:{{ $container.repository.tag | default "" }}
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      env:
+        - name: ENVIRONMENT
+          value: {{ $environment }}
+        - name: NAMESPACE
+          value: {{ $namespace }}
+        - name: AWS_STS_REGIONAL_ENDPOINTS
+          value: "regional"
+        - name: TF_VAR_super_user
+          value: "false"
+        - name: TF_VAR_aws_account_number
+          value: "931670397156"
+        - name: TF_REGISTRY_CLIENT_TIMEOUT
+          value: "100"
+        - name: TERRAFORM_BUCKET
+          value: "terraform-orbit"
+      {{- with $container.environments }}
+        {{- range $key, $value := . }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+      {{- end }}
+      {{- with $container.resources }}
+      resources:
+        requests:
+          cpu: {{ .requests.cpu | default "100m" }}
+          memory: {{ .requests.memory | default "32Mi" }}
+        limits:
+          cpu: {{ .limits.cpu | default "200m" }}
+          memory: {{ .limits.memory | default "128Mi" }}
+      {{- end }}
+      {{- if $csiSecretsEnabled }}
+      volumeMounts:
+        - name: secrets-store-inline
+          mountPath: "/mnt/secrets-store"
+          readOnly: true
+      {{- end }}
+    {{- end }}

@@ -1,0 +1,135 @@
+{{- $csiSecrets := .Values.csiSecrets | default dict }}
+{{- $csiSecretsEnabled := $csiSecrets.enabled | default nil }}
+{{- $serviceAccountName := $csiSecrets.serviceAccountName | default "parameters" }}
+{{- $common := .Values.common | default dict }}
+{{- $common_envs := $common.envs | default dict }}
+{{- $application := .Values.application | default dict }}
+{{- $application_name := $application.name | default .Release.Name }}
+{{- $application_type := $application.type | default "migration" }}
+{{ $environment := .Values.environment | default "none" }}
+{{ $namespace := .Release.Namespace | default "none" }}
+{{- $module := .Values.module | default "none" }}
+{{ $volumes := .Values.volumes | default nil }}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    orbit-application-name: {{ $application_name }}
+    orbit-application-type: {{ $application_type }}
+    orbit_module: {{ $module }}
+  name: {{ .Release.Name }}
+spec:
+  schedule: {{ .Values.scheduler }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 900
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            sidecar.istio.io/inject: "false"
+        spec:
+          restartPolicy: OnFailure
+          {{- if .Values.nodeSelector }}
+          nodeSelector:
+          {{ toYaml .Values.nodeSelector | indent 4 }}
+          {{- end }}
+          volumes:
+            - name: secrets-store-inline
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: {{ .Values.applicationType |quote }}
+          {{- if $volumes }}
+              {{ range $volume := $volumes }}
+            - name: {{ $volume.name | quote }}
+              {{- if $volume.claimName }}
+              persistentVolumeClaim:
+                claimName: {{ $volume.claimName }}
+              {{ else }}
+              emptyDir: {}
+              {{ end }}
+              {{ end }}
+          {{- end }}
+          initContainers:
+          {{ range $container := .Values.initContainers}}
+            - name: {{ $container.name }}
+              imagePullPolicy: Always
+              image: {{ $container.repository.image }}:{{ $container.repository.tag }}
+              env:
+                - name: ENVIRONMENT
+                  value: {{ $environment }}
+                - name: NAMESPACE
+                  value: {{ $namespace }}
+              {{- range $key, $value := $container.environments }}
+                - name: {{ $key }}
+                  value: {{ $value | quote }}
+              {{- end }}
+            {{- $resources := $container.resources | default dict }}
+            {{- $requests := $resources.requests | default dict }}
+            {{- $limits := $resources.limits | default dict }}
+              resources:
+                requests:
+                  cpu: {{ $requests.cpu | default "100m" }}
+                  memory: {{ $requests.memory | default "32Mi" }}
+                limits:
+                  cpu: {{ $limits.cpu | default "200m" }}
+                  memory: {{ $limits.memory | default "128Mi" }}
+              volumeMounts:
+                - name: secrets-store-inline
+                  mountPath: "/mnt/secrets-store"
+                  readOnly: true
+              {{ range $volume := $volumes }}
+                - mountPath: {{ $volume.mountPath }}
+                  name: {{ $volume.name }}
+              {{ end }}
+          {{end}}
+          serviceAccountName: {{ $serviceAccountName }}
+          containers:
+          {{ range $container := .Values.containers}}
+
+            - name: {{ $container.name }}
+              imagePullPolicy: IfNotPresent
+              image: {{ $container.repository.image }}:{{ $container.repository.tag }}
+
+              ports:
+                - containerPort: 3000
+
+              {{- $resources := $container.resources | default dict }}
+              {{- $requests := $resources.requests | default dict }}
+              {{- $limits := $resources.limits | default dict }}
+              resources:
+                requests:
+                  cpu: {{ $requests.cpu | default "100m" }}
+                  memory: {{ $requests.memory | default "32Mi" }}
+                limits:
+                  cpu: {{ $limits.cpu | default "200m" }}
+                  memory: {{ $limits.memory | default "128Mi" }}
+
+              env:
+                - name: ENVIRONMENT
+                  value: {{ $environment }}
+                - name: NAMESPACE
+                  value: {{ $namespace }}
+              {{- range $key, $value := $container.environments }}
+                - name: {{ $key }}
+                  value: {{ $value | quote }}
+              {{- end }}
+              volumeMounts:
+                - name: secrets-store-inline
+                  mountPath: "/mnt/secrets-store"
+                  readOnly: true
+
+                {{- if $volumes }}
+                  {{ range $volume := $volumes }}
+                - mountPath: {{ $volume.mountPath }}
+                  name: {{ $volume.name }}
+                  {{ end }}
+                {{- end }}
+          {{end}}

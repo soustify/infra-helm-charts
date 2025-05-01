@@ -1,0 +1,215 @@
+{{- $replicas := .Values.replicas | default dict }}
+{{- $application_type := "micro-services" }}
+{{- $desiredCapacity := $replicas.desiredCapacity | default 1 }}
+{{- $deployment := .Values.deployment | default dict }}
+{{ $Release := .Release.Name }}
+{{ $volumes := .Values.volumes | default nil }}
+{{ $environment := .Values.environment | default "none" }}
+{{ $namespace := .Release.Namespace | default "none" }}
+{{- $csiSecrets := .Values.csiSecrets | default dict }}
+{{- $csiSecretsEnabled := $csiSecrets.enabled | default nil }}
+{{- $serviceAccountName := $csiSecrets.serviceAccountName | default "parameters" }}
+{{- $observability := .Values.observability | default false }}
+{{- $module := .Values.module | default "none" }}
+{{- $istio := .Values.istio | default dict }}
+{{- $istioEnabled := $istio.enable | default false }}
+
+
+{{- $terminationGracePeriodSeconds := .Values.terminationGracePeriodSeconds | default 60 }}
+
+apiVersion: "apps/v1"
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    orbit_application_name: {{ .Release.Name }}
+    orbit_application_type: {{ $application_type }}
+    orbit_module: {{ $module }}
+
+
+    {{- if eq $environment "production" }}
+    enable-to-scale-by-bot: "false"
+    {{ else }}
+    enable-to-scale-by-bot: "true"
+    {{ end }}
+spec:
+  replicas: {{ $desiredCapacity }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- if not $istioEnabled }}
+        "sidecar.istio.io/inject": "false"
+        {{ end }}
+        app: {{ .Release.Name }}
+        {{- if eq $observability true }}
+        observability: "true"
+        {{ else }}
+        observability: "false"
+        {{ end }}
+        orbit_application_name: {{ .Release.Name }}
+        orbit_application_type: {{ $application_type }}
+        orbit_module: {{ $module }}
+
+    spec:
+    {{- if $csiSecretsEnabled }}
+      serviceAccountName: {{ $serviceAccountName }}
+    {{- end }}
+
+    {{- if .Values.affinity }}
+      affinity:
+      {{ toYaml .Values.affinity | indent 4 }}
+    {{- end }}
+
+
+    {{- if .Values.nodeSelector }}
+      nodeSelector:
+      {{ toYaml .Values.nodeSelector | indent 4 }}
+    {{- end }}
+      volumes:
+      {{- if $csiSecretsEnabled }}
+        - name: secrets-store-inline
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Release.Name }}
+      {{- end}}
+      {{- if $volumes }}
+          {{ range $volume := $volumes }}
+        - name: {{ $volume.name | quote }}
+          {{- if $volume.claimName }}
+          persistentVolumeClaim:
+            claimName: {{ $volume.claimName }}
+          {{ else }}
+          emptyDir: {}
+          {{ end }}
+          {{ end }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ $terminationGracePeriodSeconds }}
+      containers:
+      {{ range $container := .Values.containers}}
+        - name: {{ $container.name }}
+          imagePullPolicy: IfNotPresent
+          image: {{ $container.repository.image }}:{{ $container.repository.tag }}
+          lifecycle:
+            {{- toYaml $container.lifecycle | nindent 11 }}
+          env:
+            - name: ENVIRONMENT
+              value: {{ $environment }}
+            - name: NAMESPACE
+              value: {{ $namespace }}
+          {{- range $key, $value := $container.environments }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+          {{- end }}
+
+
+        {{- $ports := $container.ports | default nil }}
+        {{- if $ports }}
+          ports:
+          {{ range $port:= $ports }}
+            - containerPort: {{ $port.targetPort }}
+          {{end}}
+        {{end}}
+
+        {{- $resources := $container.resources | default dict }}
+        {{- $requests := $resources.requests | default dict }}
+        {{- $limits := $resources.limits | default dict }}
+          resources:
+            requests:
+              cpu: {{ $requests.cpu | default "100m" }}
+              memory: {{ $requests.memory | default "32Mi" }}
+            limits:
+              cpu: {{ $limits.cpu | default "200m" }}
+              memory: {{ $limits.memory | default "128Mi" }}
+        {{- $livenessProbe := $container.livenessProbe | default nil }}
+        {{- if $livenessProbe }}
+        {{- $livenessProbe_httpGet := $livenessProbe.httpGet | default dict }}
+          livenessProbe:
+            httpGet:
+              path: {{ $livenessProbe_httpGet.path | default "/health/check" }}
+              port: {{ $livenessProbe_httpGet.port | default 8080 }}
+              httpHeaders:
+                - name: probe
+                  value: liveness
+            successThreshold: {{ $livenessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ $livenessProbe.failureThreshold | default 5 }}
+            initialDelaySeconds: {{ $livenessProbe.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ $livenessProbe.periodSeconds | default 5 }}
+            timeoutSeconds: {{ $livenessProbe.timeoutSeconds | default 4 }}
+        {{- end }}
+        {{- $readinessProbe := $container.readinessProbe | default nil }}
+        {{- if $readinessProbe }}
+        {{- $readinessProbe_httpGet := $readinessProbe.httpGet | default dict }}
+          readinessProbe:
+            httpGet:
+              path: {{ $readinessProbe_httpGet.path | default "/health/check" }}
+              port: {{ $readinessProbe_httpGet.port | default 8080 }}
+              httpHeaders:
+                - name: probe
+                  value: readiness
+            successThreshold: {{ $readinessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ $readinessProbe.failureThreshold | default 5 }}
+            initialDelaySeconds: {{ $readinessProbe.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ $readinessProbe.periodSeconds | default 5 }}
+            timeoutSeconds: {{ $readinessProbe.timeoutSeconds | default 4 }}
+        {{- end }}
+          volumeMounts:
+            {{- if $csiSecretsEnabled }}
+
+            - name: secrets-store-inline
+              mountPath: "/mnt/secrets-store"
+              readOnly: true
+            {{- end }}
+            {{- if $volumes }}
+              {{ range $volume := $volumes }}
+            - mountPath: {{ $volume.mountPath }}
+              name: {{ $volume.name }}
+              {{ end }}
+            {{- end }}
+      {{end}}
+      {{- if .Values.initContainers }}
+      initContainers:
+      {{ range $container := .Values.initContainers}}
+        - name: {{ $container.name }}
+          imagePullPolicy: Always
+          image: {{ $container.repository.image }}:{{ $container.repository.tag }}
+          env:
+            - name: ENVIRONMENT
+              value: {{ $environment }}
+            - name: NAMESPACE
+              value: {{ $namespace }}
+          {{- range $key, $value := $container.environments }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+          {{- end }}
+        {{- $resources := $container.resources | default dict }}
+        {{- $requests := $resources.requests | default dict }}
+        {{- $limits := $resources.limits | default dict }}
+          resources:
+            requests:
+              cpu: {{ $requests.cpu | default "100m" }}
+              memory: {{ $requests.memory | default "32Mi" }}
+            limits:
+              cpu: {{ $limits.cpu | default "200m" }}
+              memory: {{ $limits.memory | default "128Mi" }}
+          volumeMounts:
+            {{- if $csiSecretsEnabled }}
+            - name: secrets-store-inline
+              mountPath: "/mnt/secrets-store"
+              readOnly: true
+            {{- end }}
+          {{ range $volume := $volumes }}
+            - mountPath: {{ $volume.mountPath }}
+              name: {{ $volume.name }}
+          {{ end }}
+      {{end}}
+      {{- end}}

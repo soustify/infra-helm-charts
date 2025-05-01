@@ -1,0 +1,34 @@
+{{- $istio := .Values.istio | default dict }}
+{{- $enable := $istio.enable | default false }}
+
+
+{{- if $enable}}
+{{- $egress := $istio.egress | default dict }}
+{{- $virtualService := $egress.virtualService | default nil }}
+
+{{- if $virtualService }}
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-egress
+spec:
+  hosts:
+  {{- range $virtualService.hosts }}
+    - {{ . | quote }}
+  {{- end }}
+  {{- if $virtualService.gateways }}
+  gateways:
+  {{- range $virtualService.gateways }}
+    - {{ . | quote }}
+  {{- end }}
+  {{- end }}
+{{- if $virtualService.tcp }}
+  tcp:
+{{ toYaml $virtualService.tcp | indent 4 }}
+{{- end }}
+{{- if $virtualService.http }}
+  http:
+{{ toYaml $virtualService.http | indent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

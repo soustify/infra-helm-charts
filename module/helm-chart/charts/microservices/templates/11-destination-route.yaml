@@ -1,0 +1,25 @@
+{{- $istio := .Values.istio | default dict }}
+{{- $enable := $istio.enable | default false }}
+
+
+{{- if $enable}}
+{{- $egress := $istio.egress | default dict }}
+{{- $serviceEntries := $egress.serviceEntry | default nil }}
+{{- range $key, $value := $serviceEntries }}
+{{- range $hostKey, $host := $value.hosts }}
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ $value.name }}-{{$key}}-$${{$hostKey}}
+spec:
+  host: {{ $host | quote}}
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+{{- end }}
+{{- end }}
+
+
+{{- end }}
+

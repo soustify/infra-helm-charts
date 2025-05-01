@@ -1,0 +1,114 @@
+{{- $application_type := "micro-frontend" }}
+
+{{ $environment := .Values.environment | default "none" }}
+{{ $namespace := .Release.Namespace | default "none" }}
+{{- $csiSecrets := .Values.csiSecrets | default dict }}
+{{- $csiSecretsEnabled := $csiSecrets.enabled | default nil }}
+{{- $serviceAccountName := $csiSecrets.serviceAccountName | default "parameters" }}
+{{- $module := .Values.module | default "none" }}
+
+apiVersion: "apps/v1"
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    orbit-application-name: {{ .Release.Name }}
+    orbit-application-type: {{ $application_type }}
+    orbit_module: {{ $module }}
+
+
+    {{- if eq $environment "production" }}
+    enable-to-scale-by-bot: "false"
+    {{ else }}
+    enable-to-scale-by-bot: "true"
+    {{ end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+    {{- if $csiSecretsEnabled }}
+      serviceAccountName: {{ $serviceAccountName }}
+    {{- end }}
+    {{- if .Values.nodeSelector }}
+      nodeSelector:
+      {{ toYaml .Values.nodeSelector | indent 4 }}
+    {{- end }}
+
+      {{- if .Values.initContainers }}
+      initContainers:
+        {{ range $container := .Values.initContainers}}
+        {{- $resources := $container.resources | default dict }}
+        {{- $requests := $resources.requests | default dict }}
+        {{- $limits := $resources.limits | default dict }}
+        - name: {{ $container.name }}
+          imagePullPolicy: Always
+          image: {{ $container.repository.image }}:{{ $container.repository.tag }}
+          env:
+            - name: ENVIRONMENT
+              value: {{ $environment }}
+            - name: NAMESPACE
+              value: {{ $namespace }}
+          {{- range $key, $value := $container.environments }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+          {{- end }}
+          resources:
+            requests:
+              cpu: {{ $requests.cpu | default "50m" }}
+              memory: {{ $requests.memory | default "32Mi" }}
+            limits:
+              cpu: {{ $limits.cpu | default "100m" }}
+              memory: {{ $limits.memory | default "128Mi" }}
+        {{- end }}
+      {{- end }}
+
+      containers:
+      {{ range $container := .Values.containers}}
+        - name: {{ $container.name }}
+          imagePullPolicy: IfNotPresent
+          image: {{ $container.repository.image }}:{{ $container.repository.tag }}
+          env:
+            - name: ENVIRONMENT
+              value: {{ $environment }}
+            - name: NAMESPACE
+              value: {{ $namespace }}
+          {{- range $key, $value := $container.environments }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+          {{- end }}
+        {{- if $container.ports }}
+          ports:
+          {{ range $port:= $container.ports }}
+            - containerPort: {{ $port.targetPort }}
+          {{end}}
+        {{end}}
+        {{- $resources := $container.resources | default dict }}
+        {{- $requests := $resources.requests | default dict }}
+        {{- $limits := $resources.limits | default dict }}
+          resources:
+            requests:
+              cpu: {{ $requests.cpu | default "100m" }}
+              memory: {{ $requests.memory | default "32Mi" }}
+            limits:
+              cpu: {{ $limits.cpu | default "200m" }}
+              memory: {{ $limits.memory | default "128Mi" }}
+      {{end}}
+
+
+
+
+
+
+
+

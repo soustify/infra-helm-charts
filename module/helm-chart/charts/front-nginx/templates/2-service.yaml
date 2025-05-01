@@ -1,0 +1,26 @@
+{{- $service := .Values.service | default dict }}
+{{- $serviceType := $service.type | default "ClusterIP" }}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  annotations:
+    {{- if $service.prometheus }}
+    orbitspot.prometheus/scrape: "true"
+    orbitspot.prometheus/scheme: "http"
+    orbitspot.prometheus/path: {{ $service.prometheus.path | quote }}
+    orbitspot.prometheus/port: {{ $service.prometheus.port | quote }}
+    {{- end }}
+spec:
+  type: {{ $serviceType }}
+  ports:
+  {{ range $container := .Values.containers}}
+    {{ range $index:= $container.ports }}
+    - targetPort: {{ $index.targetPort }}
+      port: {{ $index.port }}
+      protocol: {{ $index.protocol }}
+    {{end}}
+  {{ end }}
+  selector:
+    app: {{ .Release.Name }}
